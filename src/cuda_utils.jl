@@ -16,7 +16,6 @@ end
 function condition_fill!(a::CuArray, b, cond)
     nthreads = 256
     nblocks = cld(prod(size(a)), nthreads)
-    # @show typeof(a) size(a) typeof(b) size(b) typeof(cond) size(cond)
     @cuda threads=nthreads blocks=nblocks condition_fill_cuda!(a, b, cond)
 end
 
