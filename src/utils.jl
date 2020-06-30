@@ -33,3 +33,7 @@ function crop_like(input, target)
         return input[1:size(target, 1), 1:size(target,2), :, :]
     end
 end
+
+function logitcrossentropy_d4(ŷ::T, y::T) where {Dtype, T <: AbstractArray{Dtype, 4}}
+    -sum(y .* logsoftmax(ŷ)) / (size(y, 1) * size(y, 2) * size(y,4))
+end

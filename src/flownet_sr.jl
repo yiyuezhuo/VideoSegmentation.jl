@@ -18,9 +18,9 @@ Base.@kwdef struct FlowNetSR # Simple and Reduced, used as true flow.
     upsampled_flow3_to_2::ConvTranspose
 end
 
-function flownet_sr(out_dims::Int)
+function flownet_sr(input_dims::Int, out_dims::Int)
     FlowNetSR(
-        conv1 = conv(6, 64, kernel_size=7, stride=2),
+        conv1 = conv(input_dims, 64, kernel_size=7, stride=2),
         conv2 = conv(64, 128, kernel_size=5, stride=2),
         conv3 = conv(128, 256, kernel_size=5, stride=2),
         conv3_1 = conv(256, 256),
@@ -58,3 +58,5 @@ function (m::FlowNetSR)(x)
 
     return flow2
 end
+
+@functor FlowNetSR

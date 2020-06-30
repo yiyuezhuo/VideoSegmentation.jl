@@ -29,40 +29,40 @@ function get_left_right_weight_broadcast(val::AbstractArray{T, 3}, limit::Int) w
 
     mask = left .== right
 
-    if sum(mask) > 0 # for CUDA.jl compatible
+    # if sum(mask) > 0 # for CUDA.jl compatible
         condition_fill!(left_weight, T(1), mask)
         condition_fill!(right_weight, T(0), mask)
-    end
+    # end
 
     
     mask_left = left .< 1
-    if sum(mask_left) > 0 # for CUDA.jl compatible
+    # if any(mask_left) # for CUDA.jl compatible
         condition_fill!(left, T(1), mask_left)
         condition_fill!(left_weight, T(0), mask_left)
-    end
+    # end
 
     mask_left = left .> limit
-    if sum(mask_left) > 0
+    # if any(mask_left)
         condition_fill!(left, T(limit), mask_left)
         condition_fill!(left_weight, T(0), mask_left)
-    end
+    # end
 
     mask_right = right .< 1
-    if sum(mask_right) > 0
+    # if any(mask_right)
         r1 = condition_fill!(right, 1, mask_right)
         r2 = condition_fill!(right_weight, T(0), mask_right)
-    end
+    # end
 
     mask_right = right .> limit
-    if sum(mask_right) > 0
+    # if any(mask_right)
         condition_fill!(right, T(limit), mask_right)
         condition_fill!(right_weight, T(0), mask_right)
-    end
+    # end
 
     return left, right, left_weight, right_weight
 end
 
-function apply_flow_batch_broadcast(img1_tensor, flow_tensor)
+function apply_flow_batch_broadcast(img1_tensor::T, flow_tensor) where T
     width = size(img1_tensor, 1)
     height = size(img1_tensor, 2)
     channel = size(img1_tensor, 3)
@@ -84,7 +84,10 @@ function apply_flow_batch_broadcast(img1_tensor, flow_tensor)
     left_top_weight = left_weight .* top_weight
     left_bottom_weight = left_weight .* bottom_weight
 
-    idx_list = Array{CartesianIndex{4},4}[]
+    # idx_list = Array{CartesianIndex{4},4}[]
+    idx_list = let da = similar(left, 1,1,1,1)
+        typeof(CartesianIndex.(da, da, da, da))[]
+    end
     w_r_list = typeof(img1_tensor)[] # dim=4, but dim3=1
     di_list = typeof(img1_tensor)[]
     dj_list = typeof(img1_tensor)[]
@@ -97,18 +100,25 @@ function apply_flow_batch_broadcast(img1_tensor, flow_tensor)
     )
 
     for (w, v, c_di, c_dj) in it
-        a1 = repeat(reshape(v[2], width, height, 1, batch_size), 1, 1, channel, 1)
-        a2 = repeat(reshape(v[1], width, height, 1, batch_size), 1, 1, channel, 1)
+        # TODO: type stable problem, but it seems that we cannot do anything but make a issue to CUDA.jl
+        # a1 = repeat(reshape(v[2], width, height, 1, batch_size), 1, 1, channel, 1)
+        # a2 = repeat(reshape(v[1], width, height, 1, batch_size), 1, 1, channel, 1)
+        # repeat is too slow (use a scalar looping based version)
+
+        a1 = fill!(similar(v[2], width, height, channel, batch_size), 0) .+ reshape(v[2], width, height, 1, batch_size)
+        a2 = fill!(similar(v[1], width, height, channel, batch_size), 0) .+ reshape(v[1], width, height, 1, batch_size)
 
         a3_raw = similar(a1, channel)
         a3_raw .= 1:channel
-        a3 = repeat(reshape(a3_raw, 1, 1, channel, 1), width, height, 1, batch_size)
+        # a3 = repeat(reshape(a3_raw, 1, 1, channel, 1), width, height, 1, batch_size)
+        a3 = fill!(similar(v[1], width, height, channel, batch_size), 0) .+ reshape(a3_raw, 1, 1, channel, 1)
 
         a4_raw = similar(a1, batch_size)
         a4_raw .= 1:batch_size
-        a4 = repeat(reshape(a4_raw, 1, 1, 1, batch_size), width, height, channel, 1)
+        # a4 = repeat(reshape(a4_raw, 1, 1, 1, batch_size), width, height, channel, 1)
+        a4 = fill!(similar(v[2], width, height, channel, batch_size), 0) .+ reshape(a4_raw, 1, 1, 1, batch_size)
 
-
+        # @show typeof(a1) size(a1) typeof(a2) size(a2) typeof(a3) size(a3) typeof(a4) size(a4)
         idx = CartesianIndex.(a1, a2, a3, a4)
         ov = similar(img1_tensor)
         re_map!(ov, img1_tensor, idx)
@@ -116,6 +126,7 @@ function apply_flow_batch_broadcast(img1_tensor, flow_tensor)
         w_r = reshape(w, size(w,1), size(w, 2), 1, size(w, 3))
         img2_t_tensor += w_r .* ov
 
+        # @show typeof(idx_list) typeof(idx)
         push!(idx_list, idx)
         push!(w_r_list, w_r)
 
@@ -126,21 +137,26 @@ function apply_flow_batch_broadcast(img1_tensor, flow_tensor)
         push!(dj_list, dj)
     end
 
-    return img2_t_tensor, idx_list, w_r_list, di_list, dj_list
+    return img2_t_tensor, idx_list, w_r_list, di_list, dj_list, typeof(img2_t_tensor)
 end
 
-function ∇apply_flow_broadcast(grad_tensor, idx_list, w_r_list, di_list, dj_list)
+function ∇apply_flow_broadcast(grad_tensor, idx_list, w_r_list, di_list, dj_list, out_type)
+    # @show typeof(grad_tensor) size(grad_tensor)
+    # dump(grad_tensor)
+
+    # grad_tensor = out_type(grad_tensor)
+
     width = size(grad_tensor, 1)
     height = size(grad_tensor, 2)
     batch_size = size(grad_tensor, 4)   
 
-    grad_flow = similar(grad_tensor, width, height, 2, batch_size)
+    # grad_flow = similar(grad_tensor, width, height, 2, batch_size)
+    grad_flow = out_type(undef, width, height, 2, batch_size)
     fill!(grad_flow, 0)
 
     grad_i_cpu = zeros(size(grad_tensor)...)
 
     for (idx, w_r, di, dj) in zip(idx_list, w_r_list, di_list, dj_list)
-        s_idx_list = findall(idx .== [CartesianIndex(5, 24, 1, 2)])
 
         gr_cpu = Array(grad_tensor .* w_r)
         idx_cpu = Array(idx)
@@ -153,9 +169,35 @@ function ∇apply_flow_broadcast(grad_tensor, idx_list, w_r_list, di_list, dj_li
         
     end
 
-    grad_i = typeof(grad_tensor)(grad_i_cpu)
+    grad_i = out_type(grad_i_cpu)
 
     return grad_i, grad_flow
+end
+
+apply_flow_batch_broadcast_1(img1_tensor, flow_tensor) = apply_flow_batch_broadcast(img1_tensor, flow_tensor)[1]
+
+@adjoint function apply_flow_batch_broadcast_1(img1_tensor, flow_tensor)
+    img2_t_tensor, idx_list, w_r_list, di_list, dj_list, out_type = apply_flow_batch_broadcast(img1_tensor, flow_tensor)
+    back(grad_tensor) = ∇apply_flow_broadcast(grad_tensor, idx_list, w_r_list, di_list, dj_list, out_type)
+    return img2_t_tensor, back
+end
+
+function apply_flow_batch_broadcast_1_gpu_by_cpu(img1_tensor, flow_tensor)
+    img1_tensor_cpu = Array(img1_tensor)
+    flow_tensor_cpu = Array(flow_tensor)
+    apply_flow_batch_broadcast_1(img1_tensor_cpu, flow_tensor_cpu) |> cu
+end
+
+@adjoint function apply_flow_batch_broadcast_1_gpu_by_cpu(img1_tensor, flow_tensor)
+    img1_tensor_cpu = Array(img1_tensor)
+    flow_tensor_cpu = Array(flow_tensor)
+
+    img2_t_tensor, idx_list, w_r_list, di_list, dj_list, out_type = apply_flow_batch_broadcast(img1_tensor_cpu, flow_tensor_cpu)
+    function back(grad_tensor)
+        grad_i_cpu, grad_flow_cpu = ∇apply_flow_broadcast(grad_tensor, idx_list, w_r_list, di_list, dj_list, out_type)
+        return cu(grad_i_cpu), cu(grad_flow_cpu)
+    end
+    return cu(img2_t_tensor), back
 end
 
 function apply_flow_2(img1_c, flow)
@@ -267,3 +309,6 @@ apply_flow_batch(img1_tensor, flow_tensor) = apply_flow_batch_2(img1_tensor, flo
     return img2_t_arr, back
 end
 
+# At the moment, apply_flow_broadcast is the fastest implementation in most cases.
+
+const apply_flow = apply_flow_batch_broadcast_1

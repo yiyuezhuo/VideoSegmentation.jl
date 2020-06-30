@@ -79,3 +79,46 @@ end
 function add_dim3_2!(y::AbstractArray, x1, x2)
     add_dim3_2_cpu!(y, x1, x2)
 end
+
+function fill_onehot_cpu!(y, x)
+    for w=axes(x, 1), h=axes(x, 2), n=axes(x, 4)
+        i = x[w,h,1,n]
+        @inbounds y[w,h,i,n] = 1
+    end
+    return
+end
+
+function fill_onehot_gpu!(y, x)
+    
+    index = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    stride = blockDim().x * gridDim().x
+    
+    offset = size(y, 1) * size(y, 2)
+    channel = size(y, 3)
+    
+    for i = index:stride:length(x)
+        # @inbounds y[i] += x[i]
+        extra = ((i-1) ÷ offset) * offset * channel
+        offset_i = (i-1) % offset + 1
+        @inbounds y[(x[i]-1) * offset + offset_i + extra] = 1
+    end
+    
+    return
+end
+
+function onehot_dense(x::Array, limit::Int)
+    y = zeros(Float32, size(x, 1), size(x, 2), limit, size(x, 4))
+    fill!(y, 0)
+    fill_onehot_cpu!(y, x)
+    y
+end
+
+function onehot_dense(x::CuArray, limit::Int)
+    y = CuArrays.zeros(Float32, size(x, 1), size(x, 2), limit, size(x, 4))
+    fill!(y, 0)
+    N = prod(size(x))
+    numblocks = ceil(Int, N/256)
+    # @show typeof(y) typeof(x)
+    @cuda threads=256 blocks=numblocks fill_onehot_gpu!(y, x)
+    y
+end
